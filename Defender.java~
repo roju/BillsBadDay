@@ -1,0 +1,506 @@
+import java.awt.*;
+import java.util.*;
+import java.lang.System;
+import java.awt.event.*;
+public class Defender extends Game {
+ static int FRAMERATE = 60;
+ static int SCREENWIDTH = 1200;
+ static int SCREENHEIGHT = 700;
+ final int BULLET_SPEED = 12;
+ final double MAINROTATION = 5.0;
+ final double MAIN_SPEED = 4;
+ final double ENEMY_SPEED = 1;
+ //sprite state values
+ final int STATE_NORMAL = 0;
+ final int STATE_COLLIDED = 1;
+ //sprite types
+ final int SPRITE_MAIN = 1;
+ final int SPRITE_ENEMY_BIG = 10;
+ final int SPRITE_ENEMY_MEDIUM = 11;
+ final int SPRITE_ENEMY_SMALL = 12;
+ final int SPRITE_ENEMY_TINY = 13;
+ final int SPRITE_BULLET = 100;
+ //game states
+ final int GAME_MENU = 0;
+ final int GAME_RUNNING = 1;
+ final int GAME_OVER = 2;
+ //various toggles
+ boolean showBounds = false;
+ boolean collisionTesting = true;
+ //define the images used in the game
+ ImageEntity background;
+ ImageEntity bulletImage;
+ ImageEntity[] enemies = new ImageEntity[5];
+ ImageEntity[] mainImage = new ImageEntity[3];
+ int mainHealth = 20;
+ int shield = 20;
+ int score = 0;
+ int highscore = 0;
+ int cdinc=0;
+ int coolDown=0; // changes the rate of fire (higher=slower)
+ boolean throwIt=false;
+ boolean singleThrow=true;
+ boolean thrownOnce=false;
+ boolean bgOn=true;
+ boolean laserGuide=false;
+ boolean createEnemy=true;
+ boolean firstRun=true;
+ int gameState = GAME_MENU;
+ Random rand = new Random();
+ long collisionTimer = 0;
+ //some key input tracking variables
+ boolean keyLeft, keyRight, keyUp, keyDown, keyFire;
+ //sound effects and music
+ // MidiSequence music = new MidiSequence();
+ 
+ public Defender() {
+  //call base Game class constructor
+  super(FRAMERATE, SCREENWIDTH, SCREENHEIGHT);
+ }
+ 
+ void gameStartup() {
+     background = new ImageEntity(this);
+     background.load("bluespace.png");
+     mainImage[0] = new ImageEntity(this);
+     mainImage[0].load("billstanding.png");
+     mainImage[1] = new ImageEntity(this);
+     //load the enemy sprite image
+     enemies[0] = new ImageEntity(this);
+     enemies[0].load("explosion.png");
+     enemies[1] = new ImageEntity(this);
+     enemies[1].load("explosion2.png");
+     //load the bullet sprite image
+     bulletImage = new ImageEntity(this);
+     bulletImage.load("CD.png");
+     Cursor crosshairCursor = new Cursor(Cursor.CROSSHAIR_CURSOR);
+     setCursor(crosshairCursor);
+     AnimatedSprite main = new AnimatedSprite(this, graphics());
+     main.setSpriteType(SPRITE_MAIN);
+     main.setImage(mainImage[0].getImage());
+     main.setFrameWidth(main.imageWidth());
+     main.setFrameHeight(main.imageHeight());
+     main.setPosition(new Point2D(1300, 350));
+     sprites().add(main); 
+     main.setAlive(true);   
+     main.setState(STATE_NORMAL);
+ }
+
+ private void resetGame() {
+     AnimatedSprite main = (AnimatedSprite) sprites().get(0);
+     sprites().clear();
+     main.setAlive(true);
+     main.setState(STATE_NORMAL);
+     //reset variables
+     mainHealth = 20;
+     score = 0;
+ }
+ /*****************************************************
+ * gameTimedUpdate event passed by game engine
+ *****************************************************/
+ void gameTimedUpdate() {
+  checkInput();
+  //if (!gamePaused() && sprites().size() == 1) {/////////// change to new game over conditions
+   //resetGame();
+  // gameState = GAME_OVER;
+  //}
+ }
+ /*****************************************************
+ * gameRefreshScreen event passed by game engine
+ *****************************************************/
+ void gameRefreshScreen() {
+     AnimatedSprite main = new AnimatedSprite(this, graphics());
+     Graphics2D g2d = graphics();
+     g2d.drawImage(background.getImage(),0,0,SCREENWIDTH-1,SCREENHEIGHT-1,this);
+     
+     if (gameState == GAME_MENU) {
+         g2d.setFont(new Font("Verdana", Font.BOLD, 36));
+         g2d.setColor(Color.WHITE);
+         g2d.drawString("Defender", 402, 202);
+     }
+     
+     else if (gameState == GAME_RUNNING) { 
+         g2d.setFont(new Font("Verdana", Font.BOLD, 24));
+         g2d.setColor(Color.WHITE);
+         g2d.drawString("mouse X: "+moveX+" mouseY: "+moveY, 20, 40);
+         if(laserGuide){g2d.setColor(Color.RED);g2d.drawLine((int)mainX,(int)mainY,(int)moveX,(int)moveY);}
+         if(rand.nextInt(1000)>980){
+             spawnEnemy1(new Point2D(0, rand.nextInt(690)));
+             spawnEnemy2(new Point2D(0, rand.nextInt(690)));
+         }
+         if(!singleThrow){
+             autoThrow();
+             cdinc--;
+         }
+     }
+     
+     else if (gameState == GAME_OVER) {
+         g2d.setFont(new Font("Verdana", Font.BOLD, 36));
+         g2d.setColor(Color.WHITE);
+         g2d.drawString("Game Over", 402, 202);
+         resetGame();
+         firstRun=true;  
+     }
+ }
+ 
+ /*****************************************************
+ * gameShutdown event passed by game engine
+ *****************************************************/
+ void gameShutdown() {
+//  music.stop();
+ }
+ /*****************************************************
+ * spriteUpdate event passed by game engine
+ *****************************************************/
+ public void spriteUpdate(AnimatedSprite sprite) {
+     
+     switch(sprite.spriteType()) {
+         case SPRITE_MAIN:
+             mainX=sprite.center().X();
+             mainY=sprite.center().Y();
+             mouseControl(sprite);
+             if(gameState != GAME_MENU){stopAtEdge(sprite);}
+             break;
+             
+         case SPRITE_BULLET:
+             stopAtEdge(sprite);
+             break;
+         case SPRITE_ENEMY_BIG:
+         case SPRITE_ENEMY_MEDIUM:
+         case SPRITE_ENEMY_SMALL:
+         case SPRITE_ENEMY_TINY:
+
+             move(sprite);
+             break;
+     }
+ }
+
+ public void spriteDraw(AnimatedSprite sprite) {
+     if (showBounds) {
+         if (sprite.collided())
+             sprite.drawBounds(Color.RED);
+         else
+             sprite.drawBounds(Color.BLUE);
+     }
+ }
+ 
+ private boolean isEnemy(int spriteType) {
+     switch(spriteType) {
+         case SPRITE_ENEMY_BIG:
+         case SPRITE_ENEMY_MEDIUM:
+         case SPRITE_ENEMY_SMALL:
+         case SPRITE_ENEMY_TINY:
+             return true;
+         default:
+             return false;
+     }
+ }
+ 
+ /*****************************************************
+ * spriteDying event passed by game engine
+ * called after a sprites age reaches its lifespan
+ * at which point it will be killed off, and then removed from
+ * the linked list. you can cancel the purging process here.
+ *****************************************************/
+ public void spriteDying(AnimatedSprite sprite) {
+  //currently no need to revive any sprites
+ }
+ /*****************************************************
+ * spriteCollision event passed by game engine
+ *****************************************************/
+ public void spriteCollision(AnimatedSprite spr1, AnimatedSprite spr2) {
+     if (!collisionTesting) return;
+     //figure out what type of sprite has collided
+     switch(spr1.spriteType()) {
+         case SPRITE_BULLET:
+             if (isEnemy(spr2.spriteType())) { // bullet collides with enemy
+                  spr1.setAlive(false);
+                  spr2.setHealth(spr2.health()-1);
+                  if(spr2.health()<=0){
+                      spr2.setAlive(false);
+                  }
+             }
+             break;
+         case SPRITE_MAIN:
+             
+             break;
+         case SPRITE_ENEMY_BIG:
+         case SPRITE_ENEMY_MEDIUM:
+         case SPRITE_ENEMY_SMALL:
+         case SPRITE_ENEMY_TINY:
+             
+             break;
+     }
+ }
+
+ /*****************************************************
+ * A key is pressed
+ *****************************************************/
+ 
+ public void gameKeyDown(int keyCode) {
+     switch(keyCode) {
+         case KeyEvent.VK_A:
+             keyLeft = true;
+             break;
+         case KeyEvent.VK_D:
+             keyRight = true;
+             break;
+         case KeyEvent.VK_W:
+             keyUp = true;
+             break;
+         case KeyEvent.VK_S:
+             keyDown = true;
+             break;
+         case KeyEvent.VK_F:
+             singleThrow=!singleThrow;
+             break;
+         case KeyEvent.VK_L:
+             laserGuide=!laserGuide;
+             break;
+         case KeyEvent.VK_ENTER:
+             if (gameState == GAME_MENU) {
+             gameState = GAME_RUNNING;
+         }
+             else if (gameState == GAME_OVER) {
+                 resetGame();
+                 resumeGame();
+                 gameState = GAME_RUNNING;
+             }
+             break;
+         case KeyEvent.VK_ESCAPE:
+             if (gameState == GAME_RUNNING) {
+             pauseGame();
+             gameState = GAME_OVER;
+         }
+             break;
+         case KeyEvent.VK_B:
+             //toggle bounding rectangles
+             showBounds =!showBounds;
+             break;
+         case KeyEvent.VK_C:
+             //toggle collision testing
+             collisionTesting =!collisionTesting;
+             break;
+         case KeyEvent.VK_E:
+         if(createEnemy){
+             spawnEnemy1(new Point2D(0, moveY));
+         }
+         createEnemy=false;
+             break;
+         case KeyEvent.VK_Q:
+             
+             bgOn=!bgOn;
+
+             if(bgOn){background.load("bluespace.png");}
+             else
+                 background.load("black.png");
+             break;
+     }
+ }
+ 
+ /*****************************************************
+ * A key is released
+ *****************************************************/
+ 
+ public void gameKeyUp(int keyCode) {
+     switch(keyCode) {
+         case KeyEvent.VK_A:
+             keyLeft = false;
+             break;
+         case KeyEvent.VK_D:
+             keyRight = false;
+             break;
+         case KeyEvent.VK_W:
+             keyUp = false;
+             break;
+         case KeyEvent.VK_S:
+             keyDown = false;
+             break;
+         case KeyEvent.VK_E:
+             createEnemy=true;
+             break;
+     }
+ }
+ 
+ /*****************************************************
+ * mouse events passed by game engine
+ *****************************************************/
+ public void gameMouseDown() {
+     moveX=mousePosition().X();
+     moveY=mousePosition().Y();
+     if(gameState != GAME_MENU){
+         if(!singleThrow && buttonPressed==1){throwIt=true;}
+         else if(singleThrow && buttonPressed==1){
+             if(!thrownOnce){
+                 fireBullet();
+                 thrownOnce=true;
+             }
+         }
+     }
+ }
+ public void gameMouseUp() { 
+     moveX=mousePosition().X();
+     moveY=mousePosition().Y();
+     throwIt=false;
+     thrownOnce=false;
+ }
+ public void gameMouseMove() { 
+     moveX=mousePosition().X();
+     moveY=mousePosition().Y();
+ }
+
+ public void autoThrow(){
+     if(throwIt){
+         if(cdinc<=0)
+         {
+             fireBullet();
+             cdinc=coolDown;        
+         }
+     }
+ }
+ 
+ /*****************************************************
+ * process keys that have been pressed
+ *****************************************************/
+ public void checkInput() {
+     if (gameState != GAME_RUNNING) return;
+     //the main is always the first sprite in the linked list
+     AnimatedSprite main = (AnimatedSprite)sprites().get(0);
+     if (keyLeft) {
+         main.setPosition(new Point2D(main.position().X()-MAIN_SPEED,main.position().Y()));
+     }
+     else if (keyRight) {
+         main.setPosition(new Point2D(main.position().X()+MAIN_SPEED,main.position().Y()));
+     }
+     if (keyUp) {
+         main.setPosition(new Point2D(main.position().X(),main.position().Y()-MAIN_SPEED));
+     }
+     if (keyDown) {
+         main.setPosition(new Point2D(main.position().X(),main.position().Y()+MAIN_SPEED));
+     }
+     else
+         //set main image to normal non-walking image
+         main.setImage(mainImage[0].getImage());
+ }
+ 
+ 
+ /*****************************************************
+ * fire a bullet from the mains position and orientation
+ *****************************************************/
+ public void fireBullet() {
+     //create the new bullet sprite
+     AnimatedSprite[] bullets = new AnimatedSprite[6];
+     bullets[0] = stockBullet();
+     adjustDirection(bullets[0], 0);
+     sprites().add(bullets[0]);
+ }
+ 
+ private void adjustDirection(AnimatedSprite sprite, double angle) {
+     angle = sprite.faceAngle() + angle;
+     if (angle < 0) angle += 360;
+     else if (angle > 360) angle -= 360;
+     sprite.setFaceAngle(angle);
+     sprite.setMoveAngle(sprite.faceAngle()-90);
+     angle = sprite.moveAngle();
+     double svx = calcAngleMoveX(angle) * BULLET_SPEED;
+     double svy = calcAngleMoveY(angle) * BULLET_SPEED;
+     sprite.setVelocity(new Point2D(svx, svy));
+ }
+ 
+ private AnimatedSprite stockBullet() {
+     //the main is always the first sprite in the linked list
+     AnimatedSprite main = (AnimatedSprite)sprites().get(0);
+     AnimatedSprite bul = new AnimatedSprite(this, graphics());
+     bul.setAlive(true);
+     bul.setImage(bulletImage.getImage());
+     bul.setFrameWidth(bulletImage.width());
+     bul.setFrameHeight(bulletImage.height());
+     bul.setSpriteType(SPRITE_BULLET);
+     bul.setLifespan(90);
+     bul.setFaceAngle(main.faceAngle());
+     bul.setMoveAngle(main.faceAngle() - 90);
+     //set the bullets velocity
+     double angle = bul.moveAngle();
+     double svx = calcAngleMoveX(angle) * BULLET_SPEED;
+     double svy = calcAngleMoveY(angle) * BULLET_SPEED;
+     bul.setVelocity(new Point2D(svx, svy));
+     //set the bullets starting position
+     double x = main.center().X() - bul.imageWidth()/2;
+     double y = main.center().Y() - bul.imageHeight()/2;
+     bul.setPosition(new Point2D(x,y));
+     return bul;
+ }
+ 
+ public void bumpScore(int howmuch) {
+     score += howmuch;
+     if (score > highscore)
+         highscore = score;
+ }
+
+ public void mouseControl(AnimatedSprite sprite){
+     radians = (((Math.atan((moveY - mainY)/(moveX - mainX)))*180)/Math.PI)+90; // radians calculation formula
+     sprite.setFaceAngle(radians);
+     if (moveX-mainX<0) 
+     { 
+         sprite.setFaceAngle(sprite.faceAngle()-180); 
+     } 
+ }
+ 
+  /*****************************************************
+ * Spawn an enemy
+ *****************************************************/
+ 
+  public void spawnEnemy1(Point2D point) {
+     AnimatedSprite enemy = new AnimatedSprite(this,graphics());
+     enemy.setSpriteType(SPRITE_ENEMY_SMALL);
+     enemy.setAlive(true);
+     enemy.setAnimImage(enemies[1].getImage());
+     enemy.setTotalFrames(8);
+     enemy.setColumns(4);
+     enemy.setFrameWidth(40);
+     enemy.setFrameHeight(40);
+     enemy.setFrameDelay(2);
+     enemy.setPosition(point);
+     enemy.setHealth(5);
+//add the new enemy to the sprite list
+     sprites().add(enemy);
+ }
+ 
+ public void spawnEnemy2(Point2D point) {
+     AnimatedSprite enemy = new AnimatedSprite(this,graphics());
+     enemy.setSpriteType(SPRITE_ENEMY_BIG);
+     enemy.setAlive(true);
+     enemy.setAnimImage(enemies[0].getImage());
+     enemy.setTotalFrames(16);
+     enemy.setColumns(4);
+     enemy.setFrameWidth(96);
+     enemy.setFrameHeight(96);
+     enemy.setFrameDelay(2);
+     enemy.setPosition(point);
+     enemy.setHealth(10);
+//add the new enemy to the sprite list
+     sprites().add(enemy);
+ }
+ 
+
+ public void move(AnimatedSprite spr){
+     spr.setPosition(new Point2D(spr.position().X()+ENEMY_SPEED,spr.position().Y()));
+ }
+ 
+ 
+ /*****************************************************
+ * cause sprite to stop at screen edges
+ *****************************************************/
+ public void stopAtEdge(AnimatedSprite spr) {
+     int w = spr.frameWidth()-1;
+     int h = spr.frameHeight()-1;
+     if (spr.position().X() < 0)
+         spr.position().setX(0);
+     else if (spr.position().X() > SCREENWIDTH-h)
+         spr.position().setX(SCREENWIDTH-w);
+     if (spr.position().Y() < 0)
+         spr.position().setY(0);
+     else if (spr.position().Y() > SCREENHEIGHT-h)
+         spr.position().setY(SCREENHEIGHT-h);
+ }
+     
+}
